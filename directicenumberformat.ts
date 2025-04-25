@@ -1,19 +1,18 @@
-// number-format.directive.ts
-import { Directive, ElementRef, Input, OnInit } from '@angular/core';
-import { NgIf } from '@angular/common';
+import { Directive, ElementRef, Input, OnChanges, SimpleChanges } from '@angular/core';
 
 @Directive({
-  standalone: true,
   selector: '[appNumberFormat]',
-  hostDirectives: [NgIf],
+  standalone: true
 })
-export class NumberFormatDirective implements OnInit {
+export class NumberFormatDirective implements OnChanges {
   @Input('appNumberFormat') numberValue!: number;
 
   constructor(private el: ElementRef) {}
 
-  ngOnInit() {
-    const formatted = new Intl.NumberFormat().format(this.numberValue);
-    this.el.nativeElement.innerText = formatted;
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['numberValue'] && this.numberValue != null) {
+      const formatted = new Intl.NumberFormat().format(this.numberValue);
+      this.el.nativeElement.innerText = formatted;
+    }
   }
 }
