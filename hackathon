@@ -1,0 +1,30 @@
+graph TD
+    A[Hackathon]
+
+    A1[Day 1: Quick wins]
+    A2[Something bigger]
+
+    A --> A1
+    A --> A2
+
+    A1a[Tidy up notes]
+    A1b[Attachment analysis & summarization with interactive chat]
+
+
+    A1 --> A1a
+    A1 --> A1b
+
+
+    A2a[Full fine tuning]
+    A2b[LoRA / QLoRA]
+    A2c[RAG]
+
+    A2 --> A2a
+    A2 --> A2b
+    A2 --> A2c
+
+    A2a --> A2aR[Not feasible, rejected]
+    A2b --> A2bR[Less time / data, rejected]
+    A2c --> A2cR[Chosen, implemented]
+
+    A2cR --> A3cR[Insights from entire application]
