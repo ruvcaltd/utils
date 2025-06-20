@@ -1,11 +1,13 @@
-# Start from official PowerShell image
 FROM mcr.microsoft.com/powershell:latest
 
-# Set PSGallery as a trusted repository and install required modules
-RUN pwsh -NoLogo -NoProfile -Command \
-    "Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted; " `
-    + "Install-Module -Name 'SqlServer' -Force -AllowClobber; " `
-    + "Install-Module -Name 'dbatools' -Force -AllowClobber"
+# Install SqlServer and dbatools modules
+RUN pwsh -Command " \
+    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted; \
+    Install-Module SqlServer -Scope AllUsers -Force -AllowClobber; \
+    Install-Module dbatools -Scope AllUsers -Force -AllowClobber; \
+    Import-Module SqlServer -ErrorAction Stop; \
+    Write-Host '✅ SqlServer module loaded successfully.' \
+    "
 
-# Default command
+# Optional: run some test commands to verify in container
 CMD ["pwsh"]
