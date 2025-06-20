@@ -11,3 +11,14 @@ RUN pwsh -Command " \
 
 # Optional: run some test commands to verify in container
 CMD ["pwsh"]
+
+
+
+Save-Module -Name SqlServer -Path ./modules
+
+FROM mcr.microsoft.com/powershell:latest
+
+COPY ./modules /usr/local/share/powershell/Modules
+
+RUN pwsh -Command "Import-Module SqlServer -ErrorAction Stop"
+
