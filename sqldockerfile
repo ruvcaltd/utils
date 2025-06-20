@@ -1,15 +1,11 @@
-# Use official PowerShell image
+# Start from official PowerShell image
 FROM mcr.microsoft.com/powershell:latest
 
-# Metadata
-LABEL maintainer="your-email@example.com"
-LABEL description="PowerShell base image with SQL Server PowerShell modules installed"
+# Set PSGallery as a trusted repository and install required modules
+RUN pwsh -NoLogo -NoProfile -Command \
+    "Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted; " `
+    + "Install-Module -Name 'SqlServer' -Force -AllowClobber; " `
+    + "Install-Module -Name 'dbatools' -Force -AllowClobber"
 
-# Install required PowerShell modules
-RUN pwsh -Command `
-    Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted; `
-    Install-Module -Name SqlServer -Force -AllowClobber; `
-    Install-Module -Name dbatools -Force -AllowClobber
-
-# Default shell
+# Default command
 CMD ["pwsh"]
