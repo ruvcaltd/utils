@@ -1,0 +1,22 @@
+How to Fix It:
+Go to Azure Portal:
+
+Navigate to Azure Active Directory > App registrations
+
+Select your app: cb7ab876-1379-42f7-b731-d97b299374ad
+
+Upload the New Certificate:
+
+Go to Certificates & secrets
+
+Under the Certificates tab, click Upload certificate
+
+Upload the new .cer (X.509 public key) file used by your app
+
+Verify Certificate Thumbprint:
+
+Make sure the certificate thumbprint in your local code matches the one uploaded to Azure AD
+
+Optional – Double Check Code:
+Ensure your app is referencing the correct certificate from the local certificate store or key vault. You may be still referencing an old one or a certificate from a different location.
+
