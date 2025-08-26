@@ -1,0 +1,30 @@
+using (var command = context.Database.GetDbConnection().CreateCommand())
+{
+    command.CommandText = "SELECT * FROM Users"; // any query
+    context.Database.OpenConnection();
+
+    using (var reader = command.ExecuteReader())
+    {
+        var results = new List<Dictionary<string, object>>();
+
+        while (reader.Read())
+        {
+            var row = new Dictionary<string, object>();
+
+            for (int i = 0; i < reader.FieldCount; i++)
+            {
+                var columnName = reader.GetName(i);
+                var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                row[columnName] = value;
+            }
+
+            results.Add(row);
+        }
+
+        // Now results is a list of dictionaries: each row is Key=columnName, Value=value
+        foreach (var row in results)
+        {
+            Console.WriteLine(string.Join(", ", row.Select(kv => $"{kv.Key}={kv.Value}")));
+        }
+    }
+}
