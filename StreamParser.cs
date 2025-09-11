@@ -1,34 +1,71 @@
-class StreamParser
+
+class StreamingXmlParser
 {
     private StringBuilder _buffer = new StringBuilder();
+    private string _currentTag = null;
+    private Dictionary<string, StringBuilder> _inProgress = new Dictionary<string, StringBuilder>();
     private Dictionary<string, string> _values = new Dictionary<string, string>();
-
-    // Regex for <Tag>content</Tag>
-    private Regex _tagRegex = new Regex(@"<(?<tag>\w+)>(?<content>.*?)</\k<tag>>",
-                                        RegexOptions.Singleline | RegexOptions.Compiled);
 
     public Dictionary<string, string> ProcessChunk(string chunk)
     {
         _buffer.Append(chunk);
 
-        string current = _buffer.ToString();
-        var matches = _tagRegex.Matches(current);
-
-        foreach (Match match in matches)
+        while (_buffer.Length > 0)
         {
-            string tag = match.Groups["tag"].Value;
-            string content = match.Groups["content"].Value;
+            string text = _buffer.ToString();
 
-            _values[tag] = content; // update dictionary as it streams
+            // If no tag is currently open, look for an opening tag
+            if (_currentTag == null)
+            {
+                int openIndex = text.IndexOf('<');
+                int closeIndex = text.IndexOf('>', openIndex + 1);
+
+                if (openIndex == -1 || closeIndex == -1)
+                    break; // incomplete tag, wait for more
+
+                string tagName = text.Substring(openIndex + 1, closeIndex - openIndex - 1).Trim('/');
+
+                if (!tagName.StartsWith("/")) // opening tag
+                {
+                    _currentTag = tagName;
+                    if (!_inProgress.ContainsKey(tagName))
+                        _inProgress[tagName] = new StringBuilder();
+                }
+
+                // remove processed part
+                _buffer.Remove(0, closeIndex + 1);
+            }
+            else
+            {
+                // Look for closing tag
+                string closing = $"</{_currentTag}>";
+                int closeIndex = text.IndexOf(closing);
+
+                if (closeIndex == -1)
+                {
+                    // No closing tag yet, treat everything as content
+                    _inProgress[_currentTag].Append(text);
+                    _values[_currentTag] = _inProgress[_currentTag].ToString();
+
+                    _buffer.Clear();
+                    break;
+                }
+                else
+                {
+                    // Content up to closing tag
+                    string content = text.Substring(0, closeIndex);
+                    _inProgress[_currentTag].Append(content);
+                    _values[_currentTag] = _inProgress[_currentTag].ToString();
+
+                    // Remove processed
+                    _buffer.Remove(0, closeIndex + closing.Length);
+
+                    // Tag is closed
+                    _currentTag = null;
+                }
+            }
         }
 
-        // Optional: trim processed part from buffer if tags are fully closed
-        if (matches.Count > 0)
-        {
-            var lastMatch = matches[matches.Count - 1];
-            _buffer.Remove(0, lastMatch.Index + lastMatch.Length);
-        }
-
-        return new Dictionary<string, string>(_values); // return snapshot
+        return new Dictionary<string, string>(_values);
     }
 }
