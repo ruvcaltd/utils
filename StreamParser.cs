@@ -1,71 +1,115 @@
+using System;
+using System.Collections.Generic;
+using System.Text;
 
-class StreamingXmlParser
+public class StreamingXmlParser
 {
     private StringBuilder _buffer = new StringBuilder();
-    private string _currentTag = null;
+    private Stack<string> _tagStack = new Stack<string>();                       // supports nested tags if needed
     private Dictionary<string, StringBuilder> _inProgress = new Dictionary<string, StringBuilder>();
     private Dictionary<string, string> _values = new Dictionary<string, string>();
 
+    // Snapshot of current values (call after ProcessChunk)
+    public IReadOnlyDictionary<string, string> Values => _values;
+
+    // Call this for every incoming chunk
     public Dictionary<string, string> ProcessChunk(string chunk)
     {
         _buffer.Append(chunk);
 
-        while (_buffer.Length > 0)
+        while (true)
         {
-            string text = _buffer.ToString();
+            string buf = _buffer.ToString();
 
-            // If no tag is currently open, look for an opening tag
-            if (_currentTag == null)
+            // If no open tag on stack, look for an opening tag
+            if (_tagStack.Count == 0)
             {
-                int openIndex = text.IndexOf('<');
-                int closeIndex = text.IndexOf('>', openIndex + 1);
+                int openIdx = buf.IndexOf('<');
+                if (openIdx == -1) break; // no tag start
+                int closeIdx = buf.IndexOf('>', openIdx + 1);
+                if (closeIdx == -1) break; // incomplete tag, wait for more
 
-                if (openIndex == -1 || closeIndex == -1)
-                    break; // incomplete tag, wait for more
+                string tagInner = buf.Substring(openIdx + 1, closeIdx - openIdx - 1).Trim();
 
-                string tagName = text.Substring(openIndex + 1, closeIndex - openIndex - 1).Trim('/');
-
-                if (!tagName.StartsWith("/")) // opening tag
+                if (tagInner.StartsWith("/"))
                 {
-                    _currentTag = tagName;
-                    if (!_inProgress.ContainsKey(tagName))
-                        _inProgress[tagName] = new StringBuilder();
-                }
-
-                // remove processed part
-                _buffer.Remove(0, closeIndex + 1);
-            }
-            else
-            {
-                // Look for closing tag
-                string closing = $"</{_currentTag}>";
-                int closeIndex = text.IndexOf(closing);
-
-                if (closeIndex == -1)
-                {
-                    // No closing tag yet, treat everything as content
-                    _inProgress[_currentTag].Append(text);
-                    _values[_currentTag] = _inProgress[_currentTag].ToString();
-
-                    _buffer.Clear();
-                    break;
+                    // stray closing tag when none open — ignore it
+                    _buffer.Remove(0, closeIdx + 1);
+                    continue;
                 }
                 else
                 {
-                    // Content up to closing tag
-                    string content = text.Substring(0, closeIndex);
-                    _inProgress[_currentTag].Append(content);
-                    _values[_currentTag] = _inProgress[_currentTag].ToString();
+                    // found opening tag -> create entry immediately
+                    string tagName = tagInner;
+                    _tagStack.Push(tagName);
+                    if (!_inProgress.ContainsKey(tagName)) _inProgress[tagName] = new StringBuilder();
+                    _values[tagName] = _inProgress[tagName].ToString(); // immediate presence (may be empty)
+                    _buffer.Remove(0, closeIdx + 1);
+                    continue;
+                }
+            }
+            else // there is an open tag; append content up to next '<' only
+            {
+                string currentTag = _tagStack.Peek();
+                int nextOpen = buf.IndexOf('<');
 
-                    // Remove processed
-                    _buffer.Remove(0, closeIndex + closing.Length);
+                if (nextOpen == -1)
+                {
+                    // whole buffer is content for current tag
+                    _inProgress[currentTag].Append(buf);
+                    _values[currentTag] = _inProgress[currentTag].ToString();
+                    _buffer.Clear();
+                    break;
+                }
 
-                    // Tag is closed
-                    _currentTag = null;
+                // append everything up to the next '<' (may be zero chars)
+                if (nextOpen > 0)
+                {
+                    _inProgress[currentTag].Append(buf.Substring(0, nextOpen));
+                    _values[currentTag] = _inProgress[currentTag].ToString();
+                    _buffer.Remove(0, nextOpen);
+                    continue;
+                }
+
+                // buffer starts with '<' — check if we have a full tag (opening/closing)
+                int closeIdx = buf.IndexOf('>');
+                if (closeIdx == -1) break; // incomplete tag, wait for more chunks
+
+                string tagInner = buf.Substring(1, closeIdx - 1).Trim();
+
+                if (tagInner.StartsWith("/"))
+                {
+                    // closing tag
+                    string closingName = tagInner.Substring(1);
+                    if (_tagStack.Count > 0 && _tagStack.Peek() == closingName)
+                    {
+                        // normal close
+                        _tagStack.Pop();
+                        _buffer.Remove(0, closeIdx + 1);
+                        continue;
+                    }
+                    else
+                    {
+                        // mismatch or closing deeper tag — try to recover by popping until match or ignoring
+                        // (simple strategy: ignore unmatched closing)
+                        _buffer.Remove(0, closeIdx + 1);
+                        continue;
+                    }
+                }
+                else
+                {
+                    // encountered another opening tag while one is open -> push it (supports nesting)
+                    string newTag = tagInner;
+                    _tagStack.Push(newTag);
+                    if (!_inProgress.ContainsKey(newTag)) _inProgress[newTag] = new StringBuilder();
+                    _values[newTag] = _inProgress[newTag].ToString();
+                    _buffer.Remove(0, closeIdx + 1);
+                    continue;
                 }
             }
         }
 
+        // return a snapshot copy
         return new Dictionary<string, string>(_values);
     }
 }
