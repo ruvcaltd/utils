@@ -1,0 +1,71 @@
+using System.Diagnostics;
+
+public class QdrantHostedService : IHostedService
+{
+    private Process? _qdrantProcess;
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        string qdrantPath = @"C:\qdrant\qdrant.exe";
+
+        // Example: custom storage dir + ports
+        string storageDir = @"C:\qdrant\data";
+        int httpPort = 7000;
+        int grpcPort = 7001;
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = qdrantPath,
+            Arguments = $"--storage-dir \"{storageDir}\" --uri 127.0.0.1:{httpPort} --grpc-port {grpcPort}",
+            WorkingDirectory = Path.GetDirectoryName(qdrantPath) ?? ".",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        _qdrantProcess = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+
+        _qdrantProcess.OutputDataReceived += (s, e) =>
+        {
+            if (!string.IsNullOrEmpty(e.Data))
+                Console.WriteLine($"[Qdrant] {e.Data}");
+        };
+
+        _qdrantProcess.ErrorDataReceived += (s, e) =>
+        {
+            if (!string.IsNullOrEmpty(e.Data))
+                Console.Error.WriteLine($"[Qdrant-ERR] {e.Data}");
+        };
+
+        _qdrantProcess.Start();
+        _qdrantProcess.BeginOutputReadLine();
+        _qdrantProcess.BeginErrorReadLine();
+
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (_qdrantProcess != null && !_qdrantProcess.HasExited)
+        {
+            _qdrantProcess.Kill(true);
+            _qdrantProcess.Dispose();
+        }
+        return Task.CompletedTask;
+    }
+}
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add Qdrant hosted service
+builder.Services.AddHostedService<QdrantHostedService>();
+
+builder.Services.AddControllers();
+
+var app = builder.Build();
+
+app.MapControllers();
+
+app.Run();
+
