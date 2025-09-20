@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-public class QdrantHostedService : IHostedService
+public class QdrantHostedService : IHostedService, IAsyncDisposable
 {
     private Process? _qdrantProcess;
 
@@ -8,7 +8,6 @@ public class QdrantHostedService : IHostedService
     {
         string qdrantPath = @"C:\qdrant\qdrant.exe";
 
-        // Example: custom storage dir + ports
         string storageDir = @"C:\qdrant\data";
         int httpPort = 7000;
         int grpcPort = 7001;
@@ -51,21 +50,29 @@ public class QdrantHostedService : IHostedService
         {
             _qdrantProcess.Kill(true);
             _qdrantProcess.Dispose();
+            _qdrantProcess = null;
         }
         return Task.CompletedTask;
     }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_qdrantProcess != null)
+        {
+            try
+            {
+                if (!_qdrantProcess.HasExited)
+                {
+                    _qdrantProcess.Kill(true);
+                    await _qdrantProcess.WaitForExitAsync();
+                }
+            }
+            catch { /* ignore */ }
+            finally
+            {
+                _qdrantProcess.Dispose();
+                _qdrantProcess = null;
+            }
+        }
+    }
 }
-
-var builder = WebApplication.CreateBuilder(args);
-
-// Add Qdrant hosted service
-builder.Services.AddHostedService<QdrantHostedService>();
-
-builder.Services.AddControllers();
-
-var app = builder.Build();
-
-app.MapControllers();
-
-app.Run();
-
