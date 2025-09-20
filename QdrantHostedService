@@ -1,22 +1,60 @@
 using System.Diagnostics;
+using System.Net.Http;
 
 public class QdrantHostedService : IHostedService, IAsyncDisposable
 {
     private Process? _qdrantProcess;
+    private readonly CancellationTokenSource _cts = new();
+    private Task? _monitorTask;
+
+    private readonly string _qdrantPath = @"C:\qdrant\qdrant.exe";
+    private readonly string _configPath = @"C:\qdrant\config.yaml";
+    private readonly string _healthUrl = "http://127.0.0.1:7000/readyz";
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        string qdrantPath = @"C:\qdrant\qdrant.exe";
+        // Start monitoring in background
+        _monitorTask = Task.Run(() => MonitorProcessAsync(_cts.Token));
+        return Task.CompletedTask;
+    }
 
-        string storageDir = @"C:\qdrant\data";
-        int httpPort = 7000;
-        int grpcPort = 7001;
+    private async Task MonitorProcessAsync(CancellationToken token)
+    {
+        var backoff = TimeSpan.FromSeconds(2);
 
+        while (!token.IsCancellationRequested)
+        {
+            if (_qdrantProcess == null || _qdrantProcess.HasExited)
+            {
+                Console.WriteLine("[Qdrant] Not running. Starting...");
+
+                StartQdrant();
+
+                // Wait until Qdrant is ready
+                if (await WaitUntilHealthy(token))
+                {
+                    Console.WriteLine("[Qdrant] Ready to accept requests.");
+                    backoff = TimeSpan.FromSeconds(2); // reset backoff
+                }
+                else
+                {
+                    Console.WriteLine("[Qdrant] Failed to become healthy. Retrying...");
+                    await Task.Delay(backoff, token);
+                    backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, 60)); // exponential backoff
+                }
+            }
+
+            await Task.Delay(5000, token); // check every 5s
+        }
+    }
+
+    private void StartQdrant()
+    {
         var startInfo = new ProcessStartInfo
         {
-            FileName = qdrantPath,
-            Arguments = $"--storage-dir \"{storageDir}\" --uri 127.0.0.1:{httpPort} --grpc-port {grpcPort}",
-            WorkingDirectory = Path.GetDirectoryName(qdrantPath) ?? ".",
+            FileName = _qdrantPath,
+            Arguments = $"--config-path \"{_configPath}\"",
+            WorkingDirectory = Path.GetDirectoryName(_qdrantPath) ?? ".",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -40,39 +78,45 @@ public class QdrantHostedService : IHostedService, IAsyncDisposable
         _qdrantProcess.Start();
         _qdrantProcess.BeginOutputReadLine();
         _qdrantProcess.BeginErrorReadLine();
-
-        return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    private async Task<bool> WaitUntilHealthy(CancellationToken token)
     {
+        using var client = new HttpClient();
+        for (int i = 0; i < 30; i++) // try for ~30s
+        {
+            try
+            {
+                var resp = await client.GetAsync(_healthUrl, token);
+                if (resp.IsSuccessStatusCode) return true;
+            }
+            catch { /* ignore, retry */ }
+
+            await Task.Delay(1000, token);
+        }
+        return false;
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _cts.Cancel();
+
+        if (_monitorTask != null)
+            await _monitorTask;
+
         if (_qdrantProcess != null && !_qdrantProcess.HasExited)
         {
+            Console.WriteLine("[Qdrant] Stopping...");
             _qdrantProcess.Kill(true);
+            await _qdrantProcess.WaitForExitAsync(cancellationToken);
             _qdrantProcess.Dispose();
             _qdrantProcess = null;
         }
-        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_qdrantProcess != null)
-        {
-            try
-            {
-                if (!_qdrantProcess.HasExited)
-                {
-                    _qdrantProcess.Kill(true);
-                    await _qdrantProcess.WaitForExitAsync();
-                }
-            }
-            catch { /* ignore */ }
-            finally
-            {
-                _qdrantProcess.Dispose();
-                _qdrantProcess = null;
-            }
-        }
+        await StopAsync(CancellationToken.None);
+        _cts.Dispose();
     }
 }
