@@ -1,86 +1,82 @@
-using System;
-using System.Net.Http;
-using System.Text;
-using System.Text.Json;
-using System.Threading.Tasks;
-
-public class GraphQLClient
+// Define your response DTOs
+public class UserResponse
 {
-    private readonly HttpClient _httpClient;
-    private readonly string _endpoint;
+    public User User { get; set; }
+}
 
-    public GraphQLClient(string endpoint, HttpClient httpClient = null)
+public class User
+{
+    public string Id { get; set; }
+    public string Name { get; set; }
+    public string Email { get; set; }
+}
+
+public class CreateUserResponse
+{
+    public User CreateUser { get; set; }
+}
+
+class Program
+{
+    static async Task Main(string[] args)
     {
-        _endpoint = endpoint;
-        _httpClient = httpClient ?? new HttpClient();
-    }
+        const string endpoint = "https://api.example.com/graphql";
+        const string authToken = "your-auth-token";
 
-    public async Task<GraphQLResponse<T>> ExecuteQueryAsync<T>(string query, object variables = null)
-    {
-        var request = new GraphQLRequest
+        // Using the basic client
+        using var client = new AdvancedGraphQLClient(endpoint, authToken);
+
+        try
         {
-            Query = query,
-            Variables = variables
-        };
+            // Example 1: Query
+            var query = @"
+                query GetUser($id: ID!) {
+                    user(id: $id) {
+                        id
+                        name
+                        email
+                    }
+                }";
 
-        var json = JsonSerializer.Serialize(request, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+            var variables = new { id = "123" };
+            var response = await client.QueryAsync<UserResponse>(query, variables);
 
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
+            Console.WriteLine($"User: {response.Data.User.Name}");
 
-        var response = await _httpClient.PostAsync(_endpoint, content);
-        var responseContent = await response.Content.ReadAsStringAsync();
+            // Example 2: Mutation
+            var mutation = @"
+                mutation CreateUser($input: CreateUserInput!) {
+                    createUser(input: $input) {
+                        id
+                        name
+                        email
+                    }
+                }";
 
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException($"GraphQL request failed: {response.StatusCode} - {responseContent}");
+            var mutationVariables = new
+            {
+                input = new
+                {
+                    name = "John Doe",
+                    email = "john@example.com"
+                }
+            };
+
+            var mutationResponse = await client.MutateAsync<CreateUserResponse>(mutation, mutationVariables);
+            Console.WriteLine($"Created user with ID: {mutationResponse.Data.CreateUser.Id}");
+
         }
-
-        var graphQLResponse = JsonSerializer.Deserialize<GraphQLResponse<T>>(responseContent, new JsonSerializerOptions
+        catch (GraphQLException ex)
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
-
-        if (graphQLResponse.Errors != null && graphQLResponse.Errors.Length > 0)
-        {
-            throw new GraphQLException($"GraphQL errors occurred: {string.Join(", ", graphQLResponse.Errors)}");
+            Console.WriteLine($"GraphQL Error: {ex.Message}");
         }
-
-        return graphQLResponse;
+        catch (HttpRequestException ex)
+        {
+            Console.WriteLine($"HTTP Error: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
     }
-}
-
-// Supporting classes
-public class GraphQLRequest
-{
-    public string Query { get; set; }
-    public object Variables { get; set; }
-    public string OperationName { get; set; }
-}
-
-public class GraphQLResponse<T>
-{
-    public T Data { get; set; }
-    public GraphQLError[] Errors { get; set; }
-}
-
-public class GraphQLError
-{
-    public string Message { get; set; }
-    public GraphQLLocation[] Locations { get; set; }
-    public string[] Path { get; set; }
-}
-
-public class GraphQLLocation
-{
-    public int Line { get; set; }
-    public int Column { get; set; }
-}
-
-public class GraphQLException : Exception
-{
-    public GraphQLException(string message) : base(message) { }
-    public GraphQLException(string message, Exception innerException) : base(message, innerException) { }
 }
