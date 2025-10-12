@@ -1,22 +1,67 @@
-How to Fix It:
-Go to Azure Portal:
+using Microsoft.Agents;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 
-Navigate to Azure Active Directory > App registrations
+public static class AgentFactory
+{
+    public static Agent CreateResearchAgent(IChatClient client)
+    {
+        return new Agent(
+            name: "ResearchAgent",
+            async (context, message, cancellationToken) =>
+            {
+                var query = message.Content ?? "Explain quantum computing.";
+                var response = await client.CompleteAsync(new ChatCompletionRequest
+                {
+                    Messages = [ new ChatMessage("user", $"Research and explain: {query}") ]
+                }, cancellationToken);
 
-Select your app: cb7ab876-1379-42f7-b731-d97b299374ad
+                return new AgentMessage(response.Content[0].Text);
+            });
+    }
 
-Upload the New Certificate:
+    public static Agent CreateSummarizerAgent(IChatClient client)
+    {
+        return new Agent(
+            name: "SummarizerAgent",
+            async (context, message, cancellationToken) =>
+            {
+                var response = await client.CompleteAsync(new ChatCompletionRequest
+                {
+                    Messages = [ new ChatMessage("user", $"Summarize in 3 bullet points:\n\n{message.Content}") ]
+                }, cancellationToken);
 
-Go to Certificates & secrets
+                return new AgentMessage(response.Content[0].Text);
+            });
+    }
+}
 
-Under the Certificates tab, click Upload certificate
 
-Upload the new .cer (X.509 public key) file used by your app
+using Microsoft.Agents;
+using Microsoft.Extensions.AI;
+using Microsoft.Agents.AI.OpenAI;
+using Microsoft.Agents.Workflows;
 
-Verify Certificate Thumbprint:
+var builder = WebApplication.CreateBuilder(args);
 
-Make sure the certificate thumbprint in your local code matches the one uploaded to Azure AD
+// --- Register the OpenAI client ---
+builder.Services.AddSingleton<IChatClient>(sp =>
+    new OpenAIChatClient(
+        model: "gpt-4o",
+        apiKey: Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+    ));
 
-Optional – Double Check Code:
-Ensure your app is referencing the correct certificate from the local certificate store or key vault. You may be still referencing an old one or a certificate from a different location.
+// --- Register agents using DI factory pattern ---
+builder.Services.AddSingleton<Agent>(sp => 
+    AgentFactory.CreateResearchAgent(sp.GetRequiredService<IChatClient>()));
 
+builder.Services.AddSingleton<Agent>(sp => 
+    AgentFactory.CreateSummarizerAgent(sp.GetRequiredService<IChatClient>()));
+
+// --- Optionally register workflow support ---
+builder.Services.AddSingleton<IAgentRuntime, AgentRuntime>();
+builder.Services.AddControllers();
+
+var app = builder.Build();
+app.MapControllers();
+app.Run();
