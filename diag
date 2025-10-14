@@ -1,0 +1,71 @@
+graph TD
+
+    %% Layer Labels
+    subgraph WebApi["Presentation Layer (API)"]
+        A[MyApp.WebApi]
+    end
+
+    subgraph Application["Application Layer"]
+        B[MyApp.Application]
+    end
+
+    subgraph Domain["Domain Layer"]
+        C[MyApp.Domain]
+    end
+
+    subgraph Infrastructure["Infrastructure Layer"]
+        D[MyApp.Infrastructure]
+    end
+
+    subgraph Tests["Test Layer"]
+        E[MyApp.Tests]
+    end
+
+    %% Dependencies
+    A --> B
+    A --> D
+    B --> C
+    D --> B
+    D --> C
+    E --> A
+
+    %% Style hints
+    style A fill:#1e90ff,stroke:#0b3d91,stroke-width:2px,color:white
+    style B fill:#32cd32,stroke:#0a641a,stroke-width:2px,color:white
+    style C fill:#ffb347,stroke:#b87333,stroke-width:2px,color:white
+    style D fill:#9370db,stroke:#4b0082,stroke-width:2px,color:white
+    style E fill:#d9534f,stroke:#b52b27,stroke-width:2px,color:white
+
+
+
+
+MyApp/
+ ├── MyApp.sln
+ ├── src/
+ │    ├── MyApp.WebApi/
+ │    │    ├── Controllers/
+ │    │    ├── Filters/
+ │    │    └── StartupExtensions/
+ │    ├── MyApp.Application/
+ │    │    ├── Services/
+ │    │    ├── Interfaces/
+ │    │    ├── DTOs/
+ │    │    └── Mappings/
+ │    ├── MyApp.Domain/
+ │    │    ├── Entities/
+ │    │    ├── ValueObjects/
+ │    │    └── Common/
+ │    └── MyApp.Infrastructure/
+ │         ├── Persistence/
+ │         ├── ExternalServices/
+ │         └── Migrations/
+ ├── tests/
+ │    └── MyApp.Tests/
+ │         ├── SwaggerGenerationTests/
+ │         ├── ApplicationTests/
+ │         └── DomainTests/
+ └── AngularApp/
+      └── src/app/generated/
+
+
+
