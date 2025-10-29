@@ -175,3 +175,53 @@ var response = await chat.GetChatMessageContentAsync(message);
 Console.WriteLine(response.Content);
 
 
+
+
+
+
+string html = File.ReadAllText("report.html");
+
+var result = await HtmlImageParser.ParseAsync(html, baseDirectory: Path.GetDirectoryName("report.html"));
+
+// Cleaned text (with placeholders)
+Console.WriteLine(result.CleanedHtml);
+
+// Image list
+foreach (var img in result.Images)
+{
+    Console.WriteLine($"{img.Description} => {(img.DataUri != null ? "Inline/Base64" : img.FilePath)}");
+}
+
+
+
+
+
+
+
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
+using Microsoft.SemanticKernel.ChatCompletion;
+
+var kernel = Kernel.CreateBuilder()
+    .AddOpenAIChatCompletion("gpt-4o", "your-api-key")
+    .Build();
+
+var chat = kernel.GetRequiredService<IChatCompletion>();
+
+var message = new ChatMessageContent(
+    AuthorRole.User,
+    "Analyze the following HTML document and corresponding images. " +
+    "Each [Image_x] placeholder refers to the corresponding image."
+);
+
+message.Contents.Add(new TextContent(result.CleanedHtml));
+
+foreach (var img in result.Images)
+{
+    message.Contents.Add(img);
+}
+
+var response = await chat.GetChatMessageContentAsync(message);
+Console.WriteLine(response.Content);
+
+
