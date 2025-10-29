@@ -2,129 +2,131 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.SemanticKernel.ChatCompletion;
 
 public class HtmlImageParser
 {
-    public record ParseResult(string CleanedHtml, List<ImageContent> Images);
+    public record ParseResult(string CleanedHtml, List<ParsedImage> Images);
+
+    public record ParsedImage(string Placeholder, ImageContent Content);
 
     private static readonly HttpClient _httpClient = new HttpClient();
 
     /// <summary>
-    /// Parses HTML and returns cleaned HTML with placeholders and image contents.
-    /// Handles local file paths, URLs, and base64 blobs.
+    /// Parse HTML and return cleaned HTML (placeholders) and list of parsed images (placeholder + ImageContent).
+    /// Supports data: (base64) images, absolute URLs, and local file paths (resolved against baseDirectory).
     /// </summary>
     public static async Task<ParseResult> ParseAsync(string html, string baseDirectory = "")
     {
         if (string.IsNullOrWhiteSpace(html))
-            return new ParseResult(html, new());
+            return new ParseResult(html ?? string.Empty, new List<ParsedImage>());
 
-        var images = new List<ImageContent>();
+        var images = new List<ParsedImage>();
         int counter = 0;
 
-        // Match all <img src="..."> variants
         string pattern = @"<img[^>]+src=[""']([^""']+)[""'][^>]*>";
-        string cleanedHtml = await Task.Run(async () =>
-        {
-            return await ReplaceAsync(html, pattern, async match =>
-            {
-                counter++;
-                string src = match.Groups[1].Value;
-                string placeholder = $"[Image_{counter}]";
-                ImageContent? imgContent = null;
+        var matches = Regex.Matches(html, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
-                try
+        // We'll build cleanedHtml by walking through matches to preserve non-matched text.
+        var sb = new StringBuilder();
+        int lastIndex = 0;
+
+        foreach (Match match in matches)
+        {
+            // Append text before match
+            sb.Append(html[lastIndex..match.Index]);
+
+            counter++;
+            string src = match.Groups[1].Value;
+            string placeholder = $"[Image_{counter}]";
+
+            // Default: no image content yet
+            ImageContent? imgContent = null;
+
+            try
+            {
+                if (src.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (src.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                    // Already base64 data URI — pass it as DataUri
+                    imgContent = new ImageContent
                     {
-                        // 🟢 Handle base64 embedded image
-                        string mimeType = Regex.Match(src, @"data:(image\/[a-zA-Z]+);base64,").Groups[1].Value;
-                        string base64Data = src[(src.IndexOf("base64,") + 7)..];
-                        imgContent = new ImageContent
-                        {
-                            DataUri = $"data:{mimeType};base64,{base64Data}"
-                        };
-                    }
-                    else if (Uri.IsWellFormedUriString(src, UriKind.Absolute))
+                        DataUri = src
+                    };
+                }
+                else if (Uri.IsWellFormedUriString(src, UriKind.Absolute))
+                {
+                    // Download remote image and convert to data URI
+                    var bytes = await _httpClient.GetByteArrayAsync(src);
+                    string mime = GetMimeTypeFromUrl(src) ?? "image/png";
+                    string base64 = Convert.ToBase64String(bytes);
+                    string dataUri = $"data:{mime};base64,{base64}";
+                    imgContent = new ImageContent { DataUri = dataUri };
+                }
+                else
+                {
+                    // Treat as local path (relative or absolute)
+                    string fullPath = Path.IsPathRooted(src) ? src : Path.Combine(baseDirectory ?? string.Empty, src);
+
+                    if (File.Exists(fullPath))
                     {
-                        // 🟢 Handle URL image
-                        var bytes = await _httpClient.GetByteArrayAsync(src);
-                        string mimeType = GetMimeTypeFromUrl(src);
-                        string base64Data = Convert.ToBase64String(bytes);
-                        imgContent = new ImageContent
-                        {
-                            DataUri = $"data:{mimeType};base64,{base64Data}"
-                        };
+                        // Use the file path constructor so SK can read it as a file
+                        imgContent = new ImageContent(fullPath);
                     }
                     else
                     {
-                        // 🟢 Handle local file path
-                        string fullPath = Path.IsPathRooted(src)
-                            ? src
-                            : Path.Combine(baseDirectory, src);
-
-                        if (File.Exists(fullPath))
-                        {
-                            imgContent = new ImageContent(fullPath);
-                        }
-                        else
-                        {
-                            Console.WriteLine($"⚠️ Missing image file: {fullPath}");
-                        }
-                    }
-
-                    if (imgContent != null)
-                    {
-                        // Tag the placeholder as description for correlation
-                        imgContent.Description = placeholder;
-                        images.Add(imgContent);
+                        // If file missing, fallback to a small text ImageContent won't work — skip and log
+                        Console.WriteLine($"⚠️ Missing local image file: {fullPath}");
                     }
                 }
-                catch (Exception ex)
+
+                if (imgContent != null)
                 {
-                    Console.WriteLine($"❌ Failed to process image '{src}': {ex.Message}");
+                    images.Add(new ParsedImage(placeholder, imgContent));
                 }
+            }
+            catch (Exception ex)
+            {
+                // Log and continue (don't break whole parse for one bad image)
+                Console.WriteLine($"❌ Failed to process image '{src}': {ex.Message}");
+            }
 
-                // Replace <img> with placeholder
-                return placeholder;
-            });
-        });
+            // Replace the <img> tag with placeholder
+            sb.Append(placeholder);
 
-        return new ParseResult(cleanedHtml, images);
-    }
-
-    // Helper: Regex.Replace but async delegate
-    private static async Task<string> ReplaceAsync(string input, string pattern, Func<Match, Task<string>> replacementFn)
-    {
-        var result = new System.Text.StringBuilder();
-        int lastIndex = 0;
-
-        foreach (Match match in Regex.Matches(input, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline))
-        {
-            result.Append(input[lastIndex..match.Index]);
-            string replacement = await replacementFn(match);
-            result.Append(replacement);
             lastIndex = match.Index + match.Length;
         }
-        result.Append(input[lastIndex..]);
-        return result.ToString();
+
+        // Append remaining tail of the HTML
+        sb.Append(html[lastIndex..]);
+
+        return new ParseResult(sb.ToString(), images);
     }
 
-    private static string GetMimeTypeFromUrl(string url)
+    private static string? GetMimeTypeFromUrl(string url)
     {
-        string ext = Path.GetExtension(url).ToLowerInvariant();
-        return ext switch
+        try
         {
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".webp" => "image/webp",
-            _ => "image/png"
-        };
+            var ext = Path.GetExtension(new Uri(url).AbsolutePath).ToLowerInvariant();
+            return ext switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                ".bmp" => "image/bmp",
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
+
 
 
 
