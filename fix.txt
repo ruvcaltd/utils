@@ -1,67 +1,58 @@
-using Microsoft.Agents;
-using Microsoft.Agents.AI;
-using Microsoft.Extensions.AI;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
+using Microsoft.SemanticKernel.ChatCompletion;
 
-public static class AgentFactory
+var kernel = Kernel.CreateBuilder()
+    .AddOpenAIChatCompletion("gpt-4o", "your-openai-api-key")
+    .Build();
+
+var chat = kernel.GetRequiredService<IChatCompletion>();
+
+// Example HTML
+string html = File.ReadAllText("report.html");
+
+// Extract base64 string from <img> tag
+string base64Image = ExtractBase64FromHtml(html); // You can implement a simple regex for this
+
+// Create ImageContent from Base64
+var imageContent = new ImageContent
 {
-    public static Agent CreateResearchAgent(IChatClient client)
-    {
-        return new Agent(
-            name: "ResearchAgent",
-            async (context, message, cancellationToken) =>
-            {
-                var query = message.Content ?? "Explain quantum computing.";
-                var response = await client.CompleteAsync(new ChatCompletionRequest
-                {
-                    Messages = [ new ChatMessage("user", $"Research and explain: {query}") ]
-                }, cancellationToken);
+    DataUri = $"data:image/png;base64,{base64Image}"
+};
 
-                return new AgentMessage(response.Content[0].Text);
-            });
-    }
+// Add text content (you can keep it as full HTML or stripped text)
+var textContent = new TextContent("Analyze the report and chart below: \n" + html);
 
-    public static Agent CreateSummarizerAgent(IChatClient client)
-    {
-        return new Agent(
-            name: "SummarizerAgent",
-            async (context, message, cancellationToken) =>
-            {
-                var response = await client.CompleteAsync(new ChatCompletionRequest
-                {
-                    Messages = [ new ChatMessage("user", $"Summarize in 3 bullet points:\n\n{message.Content}") ]
-                }, cancellationToken);
+// Create the composite message
+var message = new ChatMessageContent(
+    AuthorRole.User,
+    "Please analyze the following report and its embedded chart.",
+    textContent,
+    imageContent
+);
 
-                return new AgentMessage(response.Content[0].Text);
-            });
-    }
+// Send to GPT-4o
+var response = await chat.GetChatMessageContentAsync(message);
+Console.WriteLine(response.Content);
+
+// Helper
+string ExtractBase64FromHtml(string html)
+{
+    var match = System.Text.RegularExpressions.Regex.Match(
+        html,
+        @"data:image\/[a-zA-Z]+;base64,([A-Za-z0-9+/=]+)"
+    );
+    return match.Success ? match.Groups[1].Value : "";
 }
 
 
-using Microsoft.Agents;
-using Microsoft.Extensions.AI;
-using Microsoft.Agents.AI.OpenAI;
-using Microsoft.Agents.Workflows;
+var imageContents = ExtractAllBase64Images(html)
+    .Select(b64 => new ImageContent { DataUri = $"data:image/png;base64,{b64}" })
+    .ToArray();
 
-var builder = WebApplication.CreateBuilder(args);
-
-// --- Register the OpenAI client ---
-builder.Services.AddSingleton<IChatClient>(sp =>
-    new OpenAIChatClient(
-        model: "gpt-4o",
-        apiKey: Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-    ));
-
-// --- Register agents using DI factory pattern ---
-builder.Services.AddSingleton<Agent>(sp => 
-    AgentFactory.CreateResearchAgent(sp.GetRequiredService<IChatClient>()));
-
-builder.Services.AddSingleton<Agent>(sp => 
-    AgentFactory.CreateSummarizerAgent(sp.GetRequiredService<IChatClient>()));
-
-// --- Optionally register workflow support ---
-builder.Services.AddSingleton<IAgentRuntime, AgentRuntime>();
-builder.Services.AddControllers();
-
-var app = builder.Build();
-app.MapControllers();
-app.Run();
+var message = new ChatMessageContent(
+    AuthorRole.User,
+    "Analyze this HTML report and all images in context.",
+    new TextContent(html)
+);
+message.Contents.AddRange(imageContents);
