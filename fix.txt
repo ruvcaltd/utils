@@ -1,58 +1,177 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using Microsoft.SemanticKernel.ChatCompletion;
+
+public class HtmlImageParser
+{
+    public record ParseResult(string CleanedHtml, List<ImageContent> Images);
+
+    private static readonly HttpClient _httpClient = new HttpClient();
+
+    /// <summary>
+    /// Parses HTML and returns cleaned HTML with placeholders and image contents.
+    /// Handles local file paths, URLs, and base64 blobs.
+    /// </summary>
+    public static async Task<ParseResult> ParseAsync(string html, string baseDirectory = "")
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return new ParseResult(html, new());
+
+        var images = new List<ImageContent>();
+        int counter = 0;
+
+        // Match all <img src="..."> variants
+        string pattern = @"<img[^>]+src=[""']([^""']+)[""'][^>]*>";
+        string cleanedHtml = await Task.Run(async () =>
+        {
+            return await ReplaceAsync(html, pattern, async match =>
+            {
+                counter++;
+                string src = match.Groups[1].Value;
+                string placeholder = $"[Image_{counter}]";
+                ImageContent? imgContent = null;
+
+                try
+                {
+                    if (src.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 🟢 Handle base64 embedded image
+                        string mimeType = Regex.Match(src, @"data:(image\/[a-zA-Z]+);base64,").Groups[1].Value;
+                        string base64Data = src[(src.IndexOf("base64,") + 7)..];
+                        imgContent = new ImageContent
+                        {
+                            DataUri = $"data:{mimeType};base64,{base64Data}"
+                        };
+                    }
+                    else if (Uri.IsWellFormedUriString(src, UriKind.Absolute))
+                    {
+                        // 🟢 Handle URL image
+                        var bytes = await _httpClient.GetByteArrayAsync(src);
+                        string mimeType = GetMimeTypeFromUrl(src);
+                        string base64Data = Convert.ToBase64String(bytes);
+                        imgContent = new ImageContent
+                        {
+                            DataUri = $"data:{mimeType};base64,{base64Data}"
+                        };
+                    }
+                    else
+                    {
+                        // 🟢 Handle local file path
+                        string fullPath = Path.IsPathRooted(src)
+                            ? src
+                            : Path.Combine(baseDirectory, src);
+
+                        if (File.Exists(fullPath))
+                        {
+                            imgContent = new ImageContent(fullPath);
+                        }
+                        else
+                        {
+                            Console.WriteLine($"⚠️ Missing image file: {fullPath}");
+                        }
+                    }
+
+                    if (imgContent != null)
+                    {
+                        // Tag the placeholder as description for correlation
+                        imgContent.Description = placeholder;
+                        images.Add(imgContent);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ Failed to process image '{src}': {ex.Message}");
+                }
+
+                // Replace <img> with placeholder
+                return placeholder;
+            });
+        });
+
+        return new ParseResult(cleanedHtml, images);
+    }
+
+    // Helper: Regex.Replace but async delegate
+    private static async Task<string> ReplaceAsync(string input, string pattern, Func<Match, Task<string>> replacementFn)
+    {
+        var result = new System.Text.StringBuilder();
+        int lastIndex = 0;
+
+        foreach (Match match in Regex.Matches(input, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline))
+        {
+            result.Append(input[lastIndex..match.Index]);
+            string replacement = await replacementFn(match);
+            result.Append(replacement);
+            lastIndex = match.Index + match.Length;
+        }
+        result.Append(input[lastIndex..]);
+        return result.ToString();
+    }
+
+    private static string GetMimeTypeFromUrl(string url)
+    {
+        string ext = Path.GetExtension(url).ToLowerInvariant();
+        return ext switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            _ => "image/png"
+        };
+    }
+}
+
+
+
+
+string html = File.ReadAllText("report.html");
+
+var result = await HtmlImageParser.ParseAsync(html, baseDirectory: Path.GetDirectoryName("report.html"));
+
+// Cleaned text (with placeholders)
+Console.WriteLine(result.CleanedHtml);
+
+// Image list
+foreach (var img in result.Images)
+{
+    Console.WriteLine($"{img.Description} => {(img.DataUri != null ? "Inline/Base64" : img.FilePath)}");
+}
+
+
+
+
+
+
+
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.ChatCompletion;
 
 var kernel = Kernel.CreateBuilder()
-    .AddOpenAIChatCompletion("gpt-4o", "your-openai-api-key")
+    .AddOpenAIChatCompletion("gpt-4o", "your-api-key")
     .Build();
 
 var chat = kernel.GetRequiredService<IChatCompletion>();
 
-// Example HTML
-string html = File.ReadAllText("report.html");
-
-// Extract base64 string from <img> tag
-string base64Image = ExtractBase64FromHtml(html); // You can implement a simple regex for this
-
-// Create ImageContent from Base64
-var imageContent = new ImageContent
-{
-    DataUri = $"data:image/png;base64,{base64Image}"
-};
-
-// Add text content (you can keep it as full HTML or stripped text)
-var textContent = new TextContent("Analyze the report and chart below: \n" + html);
-
-// Create the composite message
 var message = new ChatMessageContent(
     AuthorRole.User,
-    "Please analyze the following report and its embedded chart.",
-    textContent,
-    imageContent
+    "Analyze the following HTML document and corresponding images. " +
+    "Each [Image_x] placeholder refers to the corresponding image."
 );
 
-// Send to GPT-4o
+message.Contents.Add(new TextContent(result.CleanedHtml));
+
+foreach (var img in result.Images)
+{
+    message.Contents.Add(img);
+}
+
 var response = await chat.GetChatMessageContentAsync(message);
 Console.WriteLine(response.Content);
 
-// Helper
-string ExtractBase64FromHtml(string html)
-{
-    var match = System.Text.RegularExpressions.Regex.Match(
-        html,
-        @"data:image\/[a-zA-Z]+;base64,([A-Za-z0-9+/=]+)"
-    );
-    return match.Success ? match.Groups[1].Value : "";
-}
 
-
-var imageContents = ExtractAllBase64Images(html)
-    .Select(b64 => new ImageContent { DataUri = $"data:image/png;base64,{b64}" })
-    .ToArray();
-
-var message = new ChatMessageContent(
-    AuthorRole.User,
-    "Analyze this HTML report and all images in context.",
-    new TextContent(html)
-);
-message.Contents.AddRange(imageContents);
