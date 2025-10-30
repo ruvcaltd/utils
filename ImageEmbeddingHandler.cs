@@ -1,27 +1,21 @@
 using Microsoft.KernelMemory;
 using Microsoft.KernelMemory.Pipeline;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.Embeddings;
+using Microsoft.KernelMemory.AI;
 
 public class ImageEmbeddingHandler : IPipelineStepHandler
 {
-    private readonly ITextEmbeddingGenerationService _embeddingService;
-    private readonly string _stepName = "generate_image_embeddings";
-    
-    // For image embeddings, you'll want to use a multimodal model like:
-    // - OpenAI CLIP
-    // - Azure Computer Vision
-    // - BLIP-2
+    private readonly ITextEmbeddingGenerator _textEmbeddingGenerator;
     private readonly IImageEmbeddingService _imageEmbeddingService;
+    private readonly string _stepName = "generate_image_embeddings";
 
     public string StepName => _stepName;
 
     public ImageEmbeddingHandler(
         IImageEmbeddingService imageEmbeddingService,
-        ITextEmbeddingGenerationService textEmbeddingService)
+        ITextEmbeddingGenerator textEmbeddingGenerator)
     {
         _imageEmbeddingService = imageEmbeddingService;
-        _embeddingService = textEmbeddingService;
+        _textEmbeddingGenerator = textEmbeddingGenerator;
     }
 
     public async Task<(bool success, DataPipeline updatedPipeline)> InvokeAsync(
@@ -42,47 +36,48 @@ public class ImageEmbeddingHandler : IPipelineStepHandler
                 await GetImageBytes(file, pipeline, cancellationToken),
                 cancellationToken);
 
-            // If you have a description, also generate text embedding
-            float[] textEmbedding = null;
+            // Generate text embedding for the description
+            Embedding textEmbedding = null;
             if (!string.IsNullOrEmpty(imageDescription))
             {
-                var embeddings = await _embeddingService.GenerateEmbeddingsAsync(
-                    new[] { imageDescription }, 
-                    cancellationToken: cancellationToken);
-                textEmbedding = embeddings.FirstOrDefault()?.ToArray();
+                textEmbedding = await _textEmbeddingGenerator.GenerateEmbeddingAsync(
+                    imageDescription, 
+                    cancellationToken);
             }
 
-            // Create a memory record for the image
-            var partition = pipeline.GetPartition(file.Id);
-            partition.Sections.Add(new DataPipeline.Section
+            // Create a new partition for the image
+            var imagePartition = new DataPipeline.Partition
             {
-                Id = Guid.NewGuid().ToString(),
+                PartitionNumber = pipeline.Partitions.Count,
+                SectionNumber = 0,
                 Content = imageDescription ?? $"Image: {file.Name}",
-                Embeddings = new List<float[]> { imageEmbedding },
-                Tags = new()
+                LastUpdate = DateTimeOffset.UtcNow,
+                Tags = new TagCollection(file.Tags)
                 {
                     { "__content_type", "image" },
                     { "__image_file", file.Name },
                     { "__has_description", (!string.IsNullOrEmpty(imageDescription)).ToString() }
                 }
+            };
+
+            // Add image embedding
+            imagePartition.Embeddings.Add(new DataPipeline.EmbeddingVector
+            {
+                GeneratorName = _imageEmbeddingService.GetType().Name,
+                Vector = imageEmbedding
             });
 
-            // Optionally add text embedding as a separate section for hybrid search
+            // Add text embedding if available (for hybrid search)
             if (textEmbedding != null)
             {
-                partition.Sections.Add(new DataPipeline.Section
+                imagePartition.Embeddings.Add(new DataPipeline.EmbeddingVector
                 {
-                    Id = Guid.NewGuid().ToString(),
-                    Content = imageDescription,
-                    Embeddings = new List<float[]> { textEmbedding },
-                    Tags = new()
-                    {
-                        { "__content_type", "image_description" },
-                        { "__image_file", file.Name },
-                        { "__parent_section", partition.Sections[^1].Id }
-                    }
+                    GeneratorName = _textEmbeddingGenerator.GetType().Name,
+                    Vector = textEmbedding.Data.ToArray()
                 });
             }
+
+            pipeline.Partitions.Add(imagePartition);
         }
 
         return (true, pipeline);
@@ -93,12 +88,7 @@ public class ImageEmbeddingHandler : IPipelineStepHandler
         DataPipeline pipeline,
         CancellationToken ct)
     {
-        // Use a vision model to generate description
-        // Example with Azure Computer Vision or GPT-4 Vision
         var imageBytes = await GetImageBytes(file, pipeline, ct);
-        
-        // Implementation depends on your vision service
-        // This is a placeholder - replace with actual service call
         return await _imageEmbeddingService.GenerateDescriptionAsync(imageBytes, ct);
     }
 
@@ -107,7 +97,7 @@ public class ImageEmbeddingHandler : IPipelineStepHandler
         DataPipeline pipeline,
         CancellationToken ct)
     {
-        using var stream = await pipeline.Storage.ReadFileAsync(
+        var stream = await pipeline.Storage.ReadFileAsync(
             pipeline.Index, 
             pipeline.DocumentId, 
             file.Name, 
@@ -126,37 +116,142 @@ public interface IImageEmbeddingService
     Task<string> GenerateDescriptionAsync(byte[] imageBytes, CancellationToken ct);
 }
 
-// Example implementation using OpenAI CLIP or similar
-public class OpenAIImageEmbeddingService : IImageEmbeddingService
+// Example implementation using Azure OpenAI GPT-4 Vision
+public class AzureOpenAIImageService : IImageEmbeddingService
 {
     private readonly HttpClient _httpClient;
+    private readonly string _endpoint;
     private readonly string _apiKey;
+    private readonly string _deploymentName;
     
-    public OpenAIImageEmbeddingService(string apiKey)
+    public AzureOpenAIImageService(string endpoint, string apiKey, string deploymentName)
     {
+        _endpoint = endpoint;
         _apiKey = apiKey;
+        _deploymentName = deploymentName;
         _httpClient = new HttpClient();
+        _httpClient.DefaultRequestHeaders.Add("api-key", apiKey);
     }
 
     public async Task<float[]> GenerateEmbeddingAsync(byte[] imageBytes, CancellationToken ct)
     {
-        // Use GPT-4 Vision or CLIP embeddings API
-        // This is a simplified example
-        var base64Image = Convert.ToBase64String(imageBytes);
+        // For now, use CLIP or similar service
+        // Azure OpenAI doesn't directly provide image embeddings
+        // You might want to:
+        // 1. Use Azure Computer Vision for image embeddings
+        // 2. Generate description first, then embed the text
+        // 3. Use a dedicated CLIP service
         
-        // Call your chosen image embedding API
-        // Return the embedding vector
+        // Option: Generate description and use text embedding
+        var description = await GenerateDescriptionAsync(imageBytes, ct);
         
-        throw new NotImplementedException("Implement based on your chosen service");
+        // This is a workaround - ideally use a proper image embedding model
+        throw new NotImplementedException(
+            "Use Azure Computer Vision or CLIP for proper image embeddings");
     }
 
     public async Task<string> GenerateDescriptionAsync(byte[] imageBytes, CancellationToken ct)
     {
-        // Use GPT-4 Vision to describe the image
         var base64Image = Convert.ToBase64String(imageBytes);
         
-        // Call vision API for description
+        var requestBody = new
+        {
+            messages = new[]
+            {
+                new
+                {
+                    role = "user",
+                    content = new object[]
+                    {
+                        new { type = "text", text = "Describe this image in detail, focusing on key elements, text, diagrams, and any important visual information." },
+                        new
+                        {
+                            type = "image_url",
+                            image_url = new
+                            {
+                                url = $"data:image/jpeg;base64,{base64Image}"
+                            }
+                        }
+                    }
+                }
+            },
+            max_tokens = 500
+        };
+
+        var response = await _httpClient.PostAsJsonAsync(
+            $"{_endpoint}/openai/deployments/{_deploymentName}/chat/completions?api-version=2024-02-15-preview",
+            requestBody,
+            ct);
+
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<dynamic>(cancellationToken: ct);
         
-        throw new NotImplementedException("Implement based on your chosen service");
+        return result?.choices[0]?.message?.content?.ToString() ?? string.Empty;
+    }
+}
+
+// Alternative: Azure Computer Vision for proper image embeddings
+public class AzureComputerVisionImageService : IImageEmbeddingService
+{
+    private readonly HttpClient _httpClient;
+    private readonly string _endpoint;
+    private readonly string _apiKey;
+    
+    public AzureComputerVisionImageService(string endpoint, string apiKey)
+    {
+        _endpoint = endpoint;
+        _apiKey = apiKey;
+        _httpClient = new HttpClient();
+        _httpClient.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", apiKey);
+    }
+
+    public async Task<float[]> GenerateEmbeddingAsync(byte[] imageBytes, CancellationToken ct)
+    {
+        // Use Azure Computer Vision 4.0 vectorize API
+        using var content = new ByteArrayContent(imageBytes);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        
+        var response = await _httpClient.PostAsync(
+            $"{_endpoint}/computervision/retrieval:vectorizeImage?api-version=2023-02-01-preview&modelVersion=latest",
+            content,
+            ct);
+
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<VectorizeImageResponse>(cancellationToken: ct);
+        
+        return result?.vector ?? Array.Empty<float>();
+    }
+
+    public async Task<string> GenerateDescriptionAsync(byte[] imageBytes, CancellationToken ct)
+    {
+        // Use Azure Computer Vision analyze API
+        using var content = new ByteArrayContent(imageBytes);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        
+        var response = await _httpClient.PostAsync(
+            $"{_endpoint}/computervision/imageanalysis:analyze?api-version=2023-02-01-preview&features=caption,denseCaptions,tags&language=en",
+            content,
+            ct);
+
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<ImageAnalysisResponse>(cancellationToken: ct);
+        
+        return result?.captionResult?.text ?? string.Empty;
+    }
+
+    private class VectorizeImageResponse
+    {
+        public float[] vector { get; set; }
+        public string modelVersion { get; set; }
+    }
+
+    private class ImageAnalysisResponse
+    {
+        public CaptionResult captionResult { get; set; }
+        public class CaptionResult
+        {
+            public string text { get; set; }
+            public float confidence { get; set; }
+        }
     }
 }
