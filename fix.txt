@@ -1,3 +1,7 @@
+dotnet add package UglyToad.PdfPig 
+dotnet add package DocumentFormat.OpenXml 
+dotnet add package SixLabors.ImageSharp
+
 using System;
 using System.Collections.Generic;
 using System.IO;
