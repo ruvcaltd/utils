@@ -3,33 +3,33 @@ private ImageContent ConvertToImageContent(byte[] imageBytes, object imageInfo)
             string mimeType = "image/png"; // default
 
             // Try to infer from imageInfo parameter first
-            if (imageInfo is UglyToad.PdfPig.Graphics.XObjectImage pdfImage)
+            if (imageInfo is UglyToad.PdfPig.Content.IPdfImage pdfImage)
             {
-                // Map PDF image color space to mime type
-                mimeType = pdfImage.IsJpeg ? "image/jpeg" : "image/png";
-            }
-            else if (imageInfo is string contentType)
-            {
-                mimeType = contentType;
-            }
-            else
-            {
-                // Try ImageSharp detection as last resort
+                // Try to detect based on image properties
+                // Most PDF images are either JPEG or use raw/deflate compression
                 try
                 {
-                    using (var memStream = new MemoryStream(imageBytes))
+                    // Check if bytes start with JPEG magic number
+                    if (imageBytes.Length > 2 && imageBytes[0] == 0xFF && imageBytes[1] == 0xD8)
                     {
-                        var detectedFormat = Image.DetectFormat(memStream);
-                        if (detectedFormat != null)
-                        {
-                            mimeType = detectedFormat.DefaultMimeType;
-                        }
+                        mimeType = "image/jpeg";
+                    }
+                    // Check if bytes start with PNG magic number
+                    else if (imageBytes.Length > 8 && 
+                             imageBytes[0] == 0x89 && imageBytes[1] == 0x50 && 
+                             imageBytes[2] == 0x4E && imageBytes[3] == 0x47)
+                    {
+                        mimeType = "image/png";
                     }
                 }
                 catch
                 {
-                    // Keep default mime type
+                    // Keep default
                 }
+            }
+            else if (imageInfo is string contentType)
+            {
+                mimeType = contentType;
             }
 
             return new ImageContent(imageBytes, mimeType);
