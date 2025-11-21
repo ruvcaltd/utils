@@ -1,0 +1,86 @@
+# ------------------------------
+# CONFIG
+# ------------------------------
+$SqlContainer = "sql1"
+$SqlPassword  = "StrongPass123!"
+$DbName       = "AlphaResearch"
+$ScriptsPath  = "C:\db\scripts"   # <-- change as needed
+$Network      = "sqlnet"
+$RedgateToken = "YOUR_REDGATE_TOKEN_HERE"   # <-- IMPORTANT
+
+# ------------------------------
+# 1. Pull images
+# ------------------------------
+docker pull mcr.microsoft.com/mssql/server:2022-latest
+docker pull redgate/sqlcompare:latest
+docker pull mcr.microsoft.com/powershell:latest
+
+# ------------------------------
+# 2. Create network (ignore if exists)
+# ------------------------------
+docker network create $Network 2>$null
+
+# ------------------------------
+# 3. Start SQL Server container
+# ------------------------------
+docker run -d `
+  --name $SqlContainer `
+  --network $Network `
+  -e "ACCEPT_EULA=Y" `
+  -e "SA_PASSWORD=$SqlPassword" `
+  -p 1433:1433 `
+  mcr.microsoft.com/mssql/server:2022-latest
+
+Write-Host "Starting SQL Server and waiting for readiness..."
+
+# ------------------------------
+# 4. Wait for SQL Server to be ready
+# ------------------------------
+$ready = $false
+for ($i = 1; $i -le 30; $i++) {
+    $output = docker exec $SqlContainer /opt/mssql-tools18/bin/sqlcmd `
+        -S localhost -U sa -P $SqlPassword -No -C -Q "SELECT 1" 2>$null
+
+    if ($LASTEXITCODE -eq 0) {
+        $ready = $true
+        break
+    }
+
+    Start-Sleep -Seconds 2
+}
+
+if (-not $ready) {
+    Write-Host "SQL Server did not start in time." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "SQL Server is ready."
+
+# ------------------------------
+# 5. Create empty database
+# ------------------------------
+Write-Host "Creating database: $DbName"
+
+docker exec $SqlContainer /opt/mssql-tools18/bin/sqlcmd `
+    -S localhost -U sa -P $SqlPassword -No -C `
+    -Q "IF DB_ID('$DbName') IS NULL CREATE DATABASE [$DbName];"
+
+# ------------------------------
+# 6. Run SQL Compare inside container WITH TOKEN
+# ------------------------------
+Write-Host "Deploying schema using SQL Compare with Redgate activation token..."
+
+docker run --rm `
+  --network $Network `
+  -e "REDGATE_TOKEN=$RedgateToken" `
+  -v "$ScriptsPath:/scripts" `
+  redgate/sqlcompare `
+    /server1:$SqlContainer `
+    /db1:$DbName `
+    /scripts2:/scripts `
+    /username1:sa `
+    /password1:$SqlPassword `
+    /sync `
+    /verbose
+
+Write-Host "Deployment completed successfully."
