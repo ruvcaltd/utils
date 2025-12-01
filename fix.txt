@@ -1,36 +1,81 @@
-private ImageContent ConvertToImageContent(byte[] imageBytes, object imageInfo)
+using System;
+
+public static class JaroWinkler
+{
+    /// <summary>
+    /// Returns Jaro-Winkler similarity between two strings (0.0 to 1.0).
+    /// </summary>
+    public static double Similarity(string s1, string s2)
+    {
+        if (s1 == null) s1 = "";
+        if (s2 == null) s2 = "";
+
+        if (s1 == s2) return 1.0;
+
+        int len1 = s1.Length;
+        int len2 = s2.Length;
+
+        if (len1 == 0 || len2 == 0) return 0.0;
+
+        int matchDistance = Math.Max(len1, len2) / 2 - 1;
+
+        bool[] s1Matches = new bool[len1];
+        bool[] s2Matches = new bool[len2];
+
+        int matches = 0;
+        int transpositions = 0;
+
+        // Step 1: Count matches
+        for (int i = 0; i < len1; i++)
         {
-            string mimeType = "image/png"; // default
+            int start = Math.Max(0, i - matchDistance);
+            int end = Math.Min(i + matchDistance + 1, len2);
 
-            // Try to infer from imageInfo parameter first
-            if (imageInfo is UglyToad.PdfPig.Content.IPdfImage pdfImage)
+            for (int j = start; j < end; j++)
             {
-                // Try to detect based on image properties
-                // Most PDF images are either JPEG or use raw/deflate compression
-                try
-                {
-                    // Check if bytes start with JPEG magic number
-                    if (imageBytes.Length > 2 && imageBytes[0] == 0xFF && imageBytes[1] == 0xD8)
-                    {
-                        mimeType = "image/jpeg";
-                    }
-                    // Check if bytes start with PNG magic number
-                    else if (imageBytes.Length > 8 && 
-                             imageBytes[0] == 0x89 && imageBytes[1] == 0x50 && 
-                             imageBytes[2] == 0x4E && imageBytes[3] == 0x47)
-                    {
-                        mimeType = "image/png";
-                    }
-                }
-                catch
-                {
-                    // Keep default
-                }
-            }
-            else if (imageInfo is string contentType)
-            {
-                mimeType = contentType;
-            }
+                if (s2Matches[j]) continue;
+                if (s1[i] != s2[j]) continue;
 
-            return new ImageContent(imageBytes, mimeType);
+                s1Matches[i] = true;
+                s2Matches[j] = true;
+                matches++;
+                break;
+            }
         }
+
+        if (matches == 0) return 0.0;
+
+        // Step 2: Count transpositions
+        int k = 0;
+        for (int i = 0; i < len1; i++)
+        {
+            if (!s1Matches[i]) continue;
+            while (!s2Matches[k]) k++;
+
+            if (s1[i] != s2[k]) transpositions++;
+            k++;
+        }
+
+        transpositions /= 2;
+
+        // Step 3: Jaro score
+        double jaro =
+            (matches / (double)len1 +
+             matches / (double)len2 +
+             (matches - transpositions) / (double)matches) / 3.0;
+
+        // Step 4: Jaro-Winkler adjustment (prefix scaling)
+        int prefix = 0;
+        for (int i = 0; i < Math.Min(4, Math.Min(len1, len2)); i++)
+        {
+            if (s1[i] == s2[i])
+                prefix++;
+            else
+                break;
+        }
+
+        double winklerBoost = 0.1 * prefix * (1 - jaro);
+
+        return jaro + winklerBoost;
+    }
+}
