@@ -117,8 +117,15 @@ namespace Lucene
                         continue;
                     }
 
+                    // Calculate position boost (if match is at start of text, boost it)
+                    var positionBoost = CalculatePositionBoost(result.MatchedText, searchText);
+
                     // Adjust score based on priority (lower priority number = higher boost)
-                    var adjustedScore = result.Score * (100f / searchableAttr.Priority);
+                    // Also apply match percentage and position boost
+                    var adjustedScore = result.Score 
+                        * (100f / searchableAttr.Priority)
+                        * ((float)matchPercentage / 100f)
+                        * positionBoost;
 
                     if (allResults.TryGetValue(objIndex, out var existing))
                     {
@@ -161,6 +168,51 @@ namespace Lucene
             return results;
         }
 
+        private float CalculatePositionBoost(string matchedText, string searchText)
+        {
+            if (string.IsNullOrWhiteSpace(matchedText) || string.IsNullOrWhiteSpace(searchText))
+            {
+                return 1.0f;
+            }
+
+            var matchedLower = matchedText.ToLowerInvariant();
+            var searchLower = searchText.ToLowerInvariant();
+
+            // Exact match
+            if (matchedLower == searchLower)
+            {
+                return 1.3f;
+            }
+
+            // Starts with search text - highest boost
+            if (matchedLower.StartsWith(searchLower))
+            {
+                return 1.2f;
+            }
+
+            // Check if first word matches
+            var searchWords = searchLower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (searchWords.Length > 0)
+            {
+                var firstSearchWord = searchWords[0];
+                if (matchedLower.StartsWith(firstSearchWord))
+                {
+                    return 1.15f;
+                }
+
+                // Find position of first word
+                var index = matchedLower.IndexOf(searchLower, StringComparison.Ordinal);
+                if (index >= 0)
+                {
+                    // The earlier in the text, the higher the boost
+                    var relativePosition = (float)index / matchedLower.Length;
+                    return 1.0f + (0.1f * (1 - relativePosition));
+                }
+            }
+
+            return 1.0f;
+        }
+
         private List<PropertySearchResult> SearchProperty(string propertyName, string searchText, Searchable searchableAttr, int maxResults)
         {
             var results = new List<PropertySearchResult>();
@@ -170,6 +222,9 @@ namespace Lucene
 
             var queries = BuildQueriesForProperty(propertyName, searchText, searchableAttr);
 
+            // Track which query tier we're using (earlier = better)
+            var queryTier = 0;
+            
             foreach (var query in queries)
             {
                 var topDocs = searcher.Search(query, maxResults);
@@ -179,10 +234,13 @@ namespace Lucene
                     var doc = searcher.Doc(scoreDoc.Doc);
                     var matchedText = doc.Get(propertyName) ?? "";
 
+                    // Apply tier-based boost: first query gets 1.0x, second gets 0.95x, etc.
+                    var tierMultiplier = 1.0f - (queryTier * 0.05f);
+                    
                     results.Add(new PropertySearchResult
                     {
                         Document = doc,
-                        Score = scoreDoc.Score,
+                        Score = scoreDoc.Score * tierMultiplier,
                         MatchedText = matchedText
                     });
                 }
@@ -192,6 +250,8 @@ namespace Lucene
                 {
                     break;
                 }
+                
+                queryTier++;
             }
 
             return results;
@@ -293,19 +353,18 @@ namespace Lucene
             var matchedLower = matchedText.ToLowerInvariant();
             var searchLower = searchText.ToLowerInvariant();
 
-            // Exact match
+            // Exact match - 100%
             if (matchedLower == searchLower)
             {
                 return 100;
             }
 
-            // Contains full search text
-            if (matchedLower.Contains(searchLower))
+            // Exact match with different case or extra whitespace - 99%
+            if (matchedText.Trim().Equals(searchText.Trim(), StringComparison.OrdinalIgnoreCase))
             {
-                return 90;
+                return 99;
             }
 
-            // Calculate based on word matches
             var searchWords = searchLower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             var matchedWords = matchedLower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
@@ -314,16 +373,188 @@ namespace Lucene
                 return 0;
             }
 
-            var matchCount = 0;
-            foreach (var searchWord in searchWords)
+            // Single word searches
+            if (searchWords.Length == 1)
             {
-                if (matchedWords.Any(mw => mw.Contains(searchWord) || searchWord.Contains(mw)))
+                var searchWord = searchWords[0];
+                
+                // Exact word match in multi-word field - 95%
+                if (matchedWords.Any(w => w == searchWord))
                 {
-                    matchCount++;
+                    return 95;
+                }
+                
+                // Word starts with search term - 85%
+                if (matchedWords.Any(w => w.StartsWith(searchWord)))
+                {
+                    return 85;
+                }
+                
+                // Contains as substring - 75%
+                if (matchedLower.Contains(searchWord))
+                {
+                    return 75;
+                }
+                
+                // Fuzzy match - calculate edit distance
+                var bestMatch = matchedWords
+                    .Select(w => new { Word = w, Distance = LevenshteinDistance(searchWord, w) })
+                    .OrderBy(x => x.Distance)
+                    .FirstOrDefault();
+                
+                if (bestMatch != null)
+                {
+                    var similarity = 1.0 - ((double)bestMatch.Distance / Math.Max(searchWord.Length, bestMatch.Word.Length));
+                    return Math.Max(50, similarity * 70); // 50-70% range for fuzzy matches
+                }
+                
+                return 50;
+            }
+
+            // Multi-word searches
+            // Check if it's a phrase match (all words in exact order)
+            if (matchedLower.Contains(searchLower))
+            {
+                // Exact phrase within text - 98%
+                if (matchedLower == searchLower)
+                {
+                    return 100;
+                }
+                // Phrase at start - 95%
+                else if (matchedLower.StartsWith(searchLower))
+                {
+                    return 95;
+                }
+                // Phrase at end - 93%
+                else if (matchedLower.EndsWith(searchLower))
+                {
+                    return 93;
+                }
+                // Phrase in middle - 90%
+                else
+                {
+                    return 90;
                 }
             }
 
-            return (matchCount * 100.0) / searchWords.Length;
+            // Check for all words present in order but not adjacent
+            if (AreWordsInOrder(matchedLower, searchWords))
+            {
+                // All words in order - 85%
+                return 85;
+            }
+
+            // Count exact word matches
+            var exactMatches = 0;
+            var partialMatches = 0;
+            var fuzzyMatches = 0;
+
+            foreach (var searchWord in searchWords)
+            {
+                if (matchedWords.Any(w => w == searchWord))
+                {
+                    exactMatches++;
+                }
+                else if (matchedWords.Any(w => w.StartsWith(searchWord) || searchWord.StartsWith(w)))
+                {
+                    partialMatches++;
+                }
+                else if (matchedWords.Any(w => w.Contains(searchWord) || searchWord.Contains(w)))
+                {
+                    partialMatches++;
+                }
+                else
+                {
+                    // Check fuzzy match
+                    var hasFuzzyMatch = matchedWords.Any(w => 
+                    {
+                        var distance = LevenshteinDistance(searchWord, w);
+                        var maxLen = Math.Max(searchWord.Length, w.Length);
+                        return distance <= Math.Max(1, maxLen / 4); // Allow 25% error
+                    });
+                    
+                    if (hasFuzzyMatch)
+                    {
+                        fuzzyMatches++;
+                    }
+                }
+            }
+
+            var totalWords = searchWords.Length;
+            
+            // All words exact match - 82%
+            if (exactMatches == totalWords)
+            {
+                return 82;
+            }
+
+            // Calculate weighted percentage
+            var exactWeight = 100.0;
+            var partialWeight = 60.0;
+            var fuzzyWeight = 30.0;
+
+            var weightedScore = (exactMatches * exactWeight + partialMatches * partialWeight + fuzzyMatches * fuzzyWeight) 
+                              / (totalWords * exactWeight);
+
+            // Scale to 50-80% range for mixed matches
+            var percentage = 50 + (weightedScore * 30);
+
+            return Math.Max(50, percentage);
+        }
+
+        private bool AreWordsInOrder(string text, string[] words)
+        {
+            var currentIndex = 0;
+            foreach (var word in words)
+            {
+                var index = text.IndexOf(word, currentIndex, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    return false;
+                }
+                currentIndex = index + word.Length;
+            }
+            return true;
+        }
+
+        private int LevenshteinDistance(string source, string target)
+        {
+            if (string.IsNullOrEmpty(source))
+            {
+                return string.IsNullOrEmpty(target) ? 0 : target.Length;
+            }
+
+            if (string.IsNullOrEmpty(target))
+            {
+                return source.Length;
+            }
+
+            var sourceLength = source.Length;
+            var targetLength = target.Length;
+            var distance = new int[sourceLength + 1, targetLength + 1];
+
+            for (var i = 0; i <= sourceLength; i++)
+            {
+                distance[i, 0] = i;
+            }
+
+            for (var j = 0; j <= targetLength; j++)
+            {
+                distance[0, j] = j;
+            }
+
+            for (var i = 1; i <= sourceLength; i++)
+            {
+                for (var j = 1; j <= targetLength; j++)
+                {
+                    var cost = target[j - 1] == source[i - 1] ? 0 : 1;
+                    distance[i, j] = Math.Min(
+                        Math.Min(distance[i - 1, j] + 1, distance[i, j - 1] + 1),
+                        distance[i - 1, j - 1] + cost);
+                }
+            }
+
+            return distance[sourceLength, targetLength];
         }
 
         private List<ObjectSearchResult<T>> AddRelatedIssuers(
