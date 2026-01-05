@@ -1,102 +1,53 @@
-[SKFunction, Description("Search research content using semantic embeddings for conceptual or natural language queries. Use when query is exploratory, descriptive, or unstructured. Not suitable for exact counts or filters.")]
-public async Task<string> VectorSearchAsync(string query)
+using System;
+using OpenAI;
+using OpenAI.Chat;
+using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.OpenAI;
+
+// 1. Initialize the standard OpenAI Client
+// Replace "your-api-key" with your actual OpenAI API key
+var apiKey = "sk-proj-your-key-here";
+var client = new OpenAIClient(apiKey);
+
+// 2. Configure GPT-5 with High Reasoning Effort
+var options = new OpenAIModelOptions
 {
-    // your implementation
+    // High effort ensures the model uses internal tokens to solve the logic
+    ReasoningEffort = ReasoningEffort.High 
+};
+
+// 3. Create the Agent using the OpenAI ChatClient
+AIAgent puzzleAgent = client.GetChatClient("gpt-5")
+    .CreateAIAgent(
+        name: "PuzzleSolver",
+        instructions: """
+            You are a logic engine. When given a puzzle:
+            - Think through the constraints silently first.
+            - Output the solution as a series of clear, numbered steps.
+            - End with a final 'Solution:' line.
+            """,
+        options: options
+    );
+
+// 4. Conversation Loop
+var thread = puzzleAgent.GetNewThread();
+
+Console.WriteLine("=== GPT-5 Standard OpenAI Puzzle Solver ===");
+Console.Write("Enter your puzzle: ");
+string? puzzle = Console.ReadLine();
+
+if (!string.IsNullOrEmpty(puzzle))
+{
+    Console.WriteLine("\nAnalyzing puzzle (Reasoning: High)...\n");
+
+    // Stream the result to see the steps as they are generated
+    await foreach (var update in thread.RunStreamingAsync(puzzle))
+    {
+        if (update is TextContentUpdate textUpdate)
+        {
+            Console.Write(textUpdate.Text);
+        }
+    }
 }
 
-[SKFunction, Description("Query structured research database using SQL. Use when user asks for exact numbers, filters, aggregations, or structured fields like dates, categories, or metrics.")]
-public async Task<string> SqlQueryAsync(string query)
-{
-    // your implementation
-}
-
-
-[SKFunctionContextParameter(Name = "researchPlugin", Description = @"
-This plugin provides two ways to query research data:
-1. VectorSearch: for exploratory, fuzzy, conceptual queries in natural language.
-2. SqlQuery: for precise, structured queries with numbers, filters, or aggregations.
-The model should choose the correct function based on query type.
-")]
-public class ResearchPlugin
-{
-    // functions here
-}
-
-
-plannerConfig.ExcludedPlugins = new string[] { "otherPlugins" };
-plannerConfig.SystemInstructions = @"
-When handling research queries:
-- Use VectorSearch for exploratory, descriptive, or unstructured natural language queries.
-- Use SqlQuery for precise, structured, fact-based queries involving filters, metrics, counts, or aggregations.
-";
-
-
-1. Vector Search Function
-
-Use this when:
-
-The user’s query is exploratory, descriptive, or unstructured.
-
-The user asks for insights, summaries, explanations, or thematic connections rather than exact figures.
-
-The query is expressed in natural language without referencing specific fields, columns, or structured filters.
-
-Examples:
-
-“What are the main challenges mentioned in renewable energy adoption?”
-
-“Summarize the key findings from research on AI in healthcare.”
-
-“What themes come up in the latest fixed-income reports?”
-
-Strengths:
-
-Great for semantic understanding of text-heavy data.
-
-Finds relevant passages even if exact keywords don’t match.
-
-Supports fuzzy, approximate, and open-ended questions.
-
-Weaknesses:
-
-Cannot guarantee precision on structured data (dates, numbers, named fields).
-
-Results depend on embeddings quality.
-
-Not suited for strict filtering or aggregations (e.g., averages, counts).
-
-2. SQL Query Function
-
-Use this when:
-
-The user’s query is specific, fact-based, and structured.
-
-The query mentions filters, metrics, counts, trends, or conditions tied to structured fields in the database.
-
-The user asks for exact numbers, statistics, comparisons, or aggregations.
-
-Examples:
-
-“Show me the number of research papers published after 2021.”
-
-“List the top 10 companies by revenue growth in Q2.”
-
-“What is the average return of fixed-income funds in the last 5 years?”
-
-“Give me all records where sector = ‘Healthcare’ and risk_rating = ‘High’.”
-
-Strengths:
-
-High precision for structured queries.
-
-Handles filtering, grouping, ordering, and aggregation.
-
-Ensures deterministic and reproducible results.
-
-Weaknesses:
-
-Limited if the user’s query is ambiguous or conceptual.
-
-Needs exact mapping between query intent and schema.
-
-Not good for free-text searches or fuzzy matching.
+Console.WriteLine("\n\nDone.");
